@@ -2,6 +2,7 @@
 
 namespace Sindll\OAuth2\Client\Provider;
 
+use GuzzleHttp\Psr7;
 use UnexpectedValueException;
 use Illuminate\Support\Str;
 use Psr\Http\Message\RequestInterface;
@@ -10,6 +11,8 @@ use League\OAuth2\Client\Provider\Exception\IdentityProviderException;
 use League\OAuth2\Client\Provider\AbstractProvider;
 use League\OAuth2\Client\Token\AccessToken;
 use League\OAuth2\Client\Tool\QueryBuilderTrait;
+use GuzzleHttp\Exception\InvalidArgumentException;
+use GuzzleHttp\Client;
 
 class Meituan extends AbstractProvider
 {
@@ -19,6 +22,7 @@ class Meituan extends AbstractProvider
      * @var string
      */
 	private $urlRequestPrefix = 'https://waimaiopen.meituan.com';
+    // private $urlRequestPrefix = 'http://wk.com/GS_XDWM_API/public';
 
 	/**
      * @inheritdoc
@@ -77,22 +81,26 @@ class Meituan extends AbstractProvider
         return $this->urlRequestPrefix;
     }
 
-    protected function getRequestUrl($url)
+    protected function getRequestUrl($url, $params)
     {
-        if (substr($url, 0, 4) == 'http') {
-            return $url;
+        if (substr($url, 0, 4) != 'http') {
+            $url = sprintf('%s/%s', trim($this->getBaseRquestPrefixUrl(), '/'), trim($url, '/'));
         }
 
-        return sprintf('%s/%s', trim($this->getBaseRquestPrefixUrl(), '/'), trim($url, '/'));
-    }
+        $time = time();
+        // $time = 1668437802;
 
-    protected function getRequestQuery($url, $params)
-    {
-    	$params['app_id']    = $this->clientId;
-    	$params['timestamp'] = time();
-    	$params['sig']       = $this->sign($url, $params);
+        $params['app_id']    = $this->clientId;
+        $params['timestamp'] = $time;
 
-        return $this->buildQueryString($params);
+        $query = [];
+        $query['app_id']    = $this->clientId;
+        $query['timestamp'] = $time;
+        $query['sig']       = $this->sign($url, $params);
+
+        $url = $this->appendQuery($url, $this->buildQueryString($query));
+
+        return $url;
     }
 
     protected function sign($url, $params)
@@ -113,12 +121,10 @@ class Meituan extends AbstractProvider
 
     public function request($method, $url, array $params = [], array $headers = [])
     {
-        $url = $this->getRequestUrl($url);
-
+        $url = $this->getRequestUrl($url, $params);
 
         if ($method === self::METHOD_GET) {
-            $query = $this->getRequestQuery($url, $params);
-            $url = $this->appendQuery($url, $query);
+            $url = $this->appendQuery($url, $this->buildQueryString($params));
         }
 
         $options = [];
@@ -126,12 +132,33 @@ class Meituan extends AbstractProvider
             $options['headers'] = $headers;
         }
         if ($method === self::METHOD_POST) {
-        	$options['body'] = json_encode($params);
+            $options['headers'] = array_merge(['content-type' => 'application/x-www-form-urlencoded'], $headers);
+            $options['body'] = $this->buildQueryString($params);
         }
 
         $request = $this->getRequest($method, $url, $options);
 
+
         $response = $this->getParsedResponse($request);
+
+        if (false === is_array($response)) {
+            throw new UnexpectedValueException(
+                'Invalid response received from Authorization Server. Expected JSON.'
+            );
+        }
+
+        return $response;
+    }
+
+    public function upload($url, array $params = [], array $options = [])
+    {
+        $url = $this->getRequestUrl($url, $params);
+
+        $client = new Client();
+
+        $request = $client->request('POST', $url, $options);
+
+        $response = $this->parseResponse($request);
 
         if (false === is_array($response)) {
             throw new UnexpectedValueException(
